@@ -1,5 +1,7 @@
 # Yağış Türü ve Olasılık Tahmini Modeli (Kırklareli Merkez)
 # ------------------------------------------
+# Yağış Türü ve Olasılık Tahmini Modeli (Kırklareli Merkez)
+# ------------------------------------------
 # Bu Python scripti, bir CSV dosyasındaki verileri kullanarak
 # makine öğrenmesi ile yağış türü ve olasılığı tahmini yapar.
 # Ayrıca Open-Meteo API kullanarak bugünün ve yarının sıcaklık değerlerini gösterir (sadece bilgi amaçlı).
@@ -38,7 +40,7 @@ X_resampled, y_resampled = ros.fit_resample(X, y)
 X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
 
 # 6. ADIM: Modeli oluştur ve eğit (XGBoost)
-model = XGBClassifier(use_label_encoder=False, eval_metric="mlogloss")
+model = XGBClassifier(eval_metric="mlogloss")
 model.fit(X_train, y_train)
 
 # 7. ADIM: Model Performansı
@@ -52,24 +54,23 @@ def get_api_weather_data(target_date):
     lat, lon = 41.735, 27.224
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        f"&daily=temperature_2m_max,relative_humidity_2m_max,precipitation_sum,wind_speed_10m_max"
+        f"&daily=temperature_2m_max,temperature_2m_min"
         f"&timezone=Europe/Istanbul"
     )
     response = requests.get(url)
     data = response.json()
+
     dates = data['daily']['time']
-    temps = data['daily']['temperature_2m_max']
-    humids = data['daily']['relative_humidity_2m_max']
-    winds = data['daily']['wind_speed_10m_max']
-    precs = data['daily']['precipitation_sum']
+    tmax = data['daily']['temperature_2m_max']
+    tmin = data['daily']['temperature_2m_min']
 
     for i, d in enumerate(dates):
         if d == target_date.strftime("%Y-%m-%d"):
+            # Ortalama sıcaklığı hesapla
             return {
-                "tavg": temps[i],
-                "humidity": humids[i],
-                "wind": winds[i],
-                "precip": precs[i]
+                "tavg": round((tmax[i] + tmin[i]) / 2, 1),
+                "tmax": tmax[i],
+                "tmin": tmin[i]
             }
     return None
 
@@ -95,10 +96,10 @@ def gui_otomatik():
     cikti_listesi = []
 
     for tarih in [bugun, yarin]:
-        giris_verisi = veri[veri["tarih"] == tarih.strftime("%Y-%m-%d")]
-        if not giris_verisi.empty:
-            tavg = giris_verisi["tavg"].values[0]
-            tavg_3g_wma = giris_verisi["tavg_3g_wma"].values[0]
+        veri_api = get_api_weather_data(tarih)
+        if veri_api:
+            tavg = veri_api['tavg']
+            tavg_3g_wma = veri["tavg_3g_wma"].iloc[-1]  # son değeri kullan
             tahmin, olasilik, etiket = yagis_tahmin_et(tarih.day, tarih.month, tavg, tavg_3g_wma)
             sonuc_metni += (f"Tarih: {tarih.day}.{tarih.month} | Sıcaklık: {tavg} °C\n"
                             f"Tahmin Edilen Yağış Türü: {etiket}\n"
@@ -113,13 +114,8 @@ def gui_otomatik():
                 "Kar %": round(olasilik[2]*100, 2)
             })
         else:
-            sonuc_metni += f"{tarih.strftime('%Y-%m-%d')}: Bu tarih için geçmiş veri bulunamadı.\n\n"
+            sonuc_metni += f"{tarih.strftime('%Y-%m-%d')}: API'den veri alınamadı.\n\n"
 
-        veri_api = get_api_weather_data(tarih)
-        if veri_api:
-            sonuc_metni += f"Nem: %{veri_api['humidity']}, Rüzgar: {veri_api['wind']} m/s, Yağış Miktarı: {veri_api['precip']} mm\n\n"
-
-    # CSV'ye yaz
     if cikti_listesi:
         df_cikti = pd.DataFrame(cikti_listesi)
         df_cikti.to_csv("gunluk_yagis_tahmini.csv", index=False)
