@@ -1,11 +1,4 @@
 # Yağış Türü ve Olasılık Tahmini Modeli (Kırklareli Merkez)
-# ------------------------------------------
-# Bu Python scripti, bir CSV dosyasındaki verileri kullanarak
-# makine öğrenmesi ile yağış türü ve olasılığı tahmini yapar.
-# Ayrıca Open-Meteo API kullanarak bugünün ve yarının sıcaklık, nem, rüzgar ve yağış bilgilerini gösterir (bilgi amaçlı).
-# Tahmin ise geçmiş veri (CSV) üzerindeki sıcaklık, WMA ve diğer meteorolojik bilgilerine dayanır.
-# Yeni özellik: Günlük tahmin çıktıları CSV dosyasına da yazılıyor.
-# GÜNCELLEME: Model olarak XGBoost entegre edildi (RandomForest yerine)
 
 import pandas as pd
 import requests, datetime
@@ -26,9 +19,9 @@ weights = [0.2, 0.3, 0.5]
 veri["tavg_3g_wma"] = veri["tavg"].rolling(window=3).apply(lambda x: sum(w*x_i for w, x_i in zip(weights, x)), raw=True)
 veri = veri.dropna(subset=["tavg_3g_wma"])
 
-# 3. ADIM: Eksik 'nem' ve 'ruzgar' varsa onları sıfırla veya ortalama ver
+# 3. ADIM: Eksik 'nem' ve 'ruzgar' varsa oluştur
 if "nem" not in veri.columns:
-    veri["nem"] = 70  # ortalama değer veya sıfır
+    veri["nem"] = 70
 if "ruzgar" not in veri.columns:
     veri["ruzgar"] = 10
 
@@ -43,17 +36,16 @@ X_resampled, y_resampled = ros.fit_resample(X, y)
 # 6. ADIM: Eğitim ve test veri setlerini oluştur
 X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
 
-# 7. ADIM: Modeli oluştur ve eğit (XGBoost)
+# 7. ADIM: Modeli oluştur ve eğit
 model = XGBClassifier(eval_metric="mlogloss")
 model.fit(X_train, y_train)
 
-# 8. ADIM: Model Performansı
+# 8. ADIM: Performans Raporu
 rapor = classification_report(y_test, model.predict(X_test))
 print("\n--- Model Doğruluk Raporu (XGBoost + Oversampling) ---")
 print(rapor)
 
-# 9. ADIM: Open-Meteo'dan çoklu hava durumu verilerini çek (sadece bilgilendirme amaçlı)
-
+# 9. ADIM: API'den veri çek
 def get_api_weather_data(target_date):
     lat, lon = 41.735, 27.224
     url = (
@@ -84,16 +76,15 @@ def get_api_weather_data(target_date):
     return None
 
 # 10. ADIM: Tahmin fonksiyonu
-
 def yagis_tahmin_et(gun, ay, tavg, tavg_3g_wma, nem, ruzgar):
-    sample = pd.DataFrame([[gun, ay, tavg, tavg_3g_wma, nem, ruzgar]], columns=["gun", "ay", "tavg", "tavg_3g_wma", "nem", "ruzgar"])
+    sample = pd.DataFrame([[gun, ay, tavg, tavg_3g_wma, nem, ruzgar]],
+                          columns=["gun", "ay", "tavg", "tavg_3g_wma", "nem", "ruzgar"])
     tahmin = model.predict(sample)[0]
     olasilik = model.predict_proba(sample)[0]
     etiketler = {0: "Yağış Yok", 1: "Yağmur", 2: "Kar"}
     return tahmin, olasilik, etiketler[tahmin]
 
-# 11. ADIM: GUI - Bugün ve yarın için tahmin ve çıktıyı CSV'ye yaz
-
+# 11. ADIM: GUI ve CSV çıktı
 def gui_otomatik():
     pencere = tk.Tk()
     pencere.title("Kırklareli Yağış Tahmini (Bugün & Yarın)")
@@ -110,14 +101,18 @@ def gui_otomatik():
             tavg = veri_api['tavg']
             nem = veri_api['nem']
             ruzgar = veri_api['ruzgar']
-            tavg_3g_wma = veri["tavg_3g_wma"].iloc[-1]  # son değeri kullan
+            tavg_3g_wma = veri["tavg_3g_wma"].iloc[-1]
             tahmin, olasilik, etiket = yagis_tahmin_et(tarih.day, tarih.month, tavg, tavg_3g_wma, nem, ruzgar)
-            sonuc_metni += (f"Tarih: {tarih.day}.{tarih.month} | Sıcaklık: {tavg} °C\n"
-                            f"Tahmin Edilen Yağış Türü: {etiket}\n"
-                            f"Yağış Yok Olasılığı: % {round(olasilik[0]*100, 2)}\n"
-                            f"Yağmur Olasılığı: % {round(olasilik[1]*100, 2)}\n"
-                            f"Kar Olasılığı: % {round(olasilik[2]*100, 2)}\n"
-                            f"Nem: %{nem}, Rüzgar: {ruzgar} m/s, Yağış Miktarı: {veri_api['yagis_mm']} mm\n\n")
+
+            sonuc_metni += (
+                f"Tarih: {tarih.day}.{tarih.month} | Sıcaklık: {tavg} °C\n"
+                f"Tahmin Edilen Yağış Türü: {etiket}\n"
+                f"Yağış Yok Olasılığı: % {round(olasilik[0]*100, 2)}\n"
+                f"Yağmur Olasılığı: % {round(olasilik[1]*100, 2)}\n"
+                f"Kar Olasılığı: % {round(olasilik[2]*100, 2)}\n"
+                f"Nem: %{nem}, Rüzgar: {ruzgar} m/s, Yağış Miktarı: {veri_api['yagis_mm']} mm\n\n"
+            )
+
             cikti_listesi.append({
                 "Tarih": tarih.strftime("%Y-%m-%d"),
                 "Tahmin": etiket,
@@ -138,6 +133,6 @@ def gui_otomatik():
     tk.Label(pencere, text=sonuc_metni, justify="left").pack(padx=10, pady=10)
     pencere.mainloop()
 
-# GUI'yi başlat
+# GUI başlat
 if __name__ == "__main__":
     gui_otomatik()
